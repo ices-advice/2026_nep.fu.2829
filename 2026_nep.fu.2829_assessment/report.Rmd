@@ -1,0 +1,572 @@
+---
+title: WGNEPH 2026 - nep.fu.2829
+subtitle: SPiCT assessment results - candidate model (Scenario 4, Model 3)
+author: "Bárbara Serra-Pereira and Marta Gonçalves (IPMA)"
+output:
+  html_notebook: 
+    theme: simplex
+    toc: yes
+    toc_float: yes
+    toc_depth: 6
+    highlight: haddock
+    number_sections: true
+---
+
+```{r setup, include=FALSE, message=FALSE}
+#rm(list=ls())
+
+options(scipen=99999)
+
+#remotes::install_github("DTUAqua/spict/spict")                # master branch
+#remotes::install_github("DTUAqua/spict/spict", ref = "dev")   # recommended by Casper Berg, 08/12/2025
+library(spict)
+library(dplyr)
+library(kableExtra)
+library(icesAdvice)
+
+
+dir.create("output")
+dir.create("plots")
+
+```
+
+# Software versions
+
+```{r include=FALSE, message=FALSE}
+R.Version()
+packageVersion("spict")
+```
+
+**R:** R version 4.4.3 (2025-02-28 ucrt) -- "Trophy Case"
+
+**SPiCT:** [spict_v1.3.8.1\@029c1a](mailto:spict_v1.3.8.1@029c1a){.email} - development version
+
+# Scenario 04
+
+## Input data
+
+-   Total Landings: 1983-2024
+
+-   Standardized Portuguese CPUE, from the commercial crustacean trawl fleet (1998-2024)
+
+-   Nephrops survey offshore Portugal (NepS) (1997-2022)
+
+-   Portuguese Autumn Groundfish Surveys (PtGFS-WIBTS-Q4) (200-500 m) (1990-2023) - DeltaGAM
+
+```{r include=FALSE}
+nep <- read.csv("nep.fu.2829_input.csv", header=TRUE, sep=";", dec=".")
+
+nep <- nep %>%
+  mutate(CPUE_norm=CPUE/(mean(nep$CPUE, na.rm=TRUE)),
+         NepS_norm=NepS/(mean(nep$NepS, na.rm=TRUE)),
+         IBTS_norm=IBTS/(mean(nep$IBTS, na.rm=TRUE)),
+         IBTS_DeltaGAM_norm=IBTS_DeltaGAM/(mean(nep$IBTS_DeltaGAM, na.rm=TRUE)) )
+```
+
+## Models Tested - Specifications
+Candidate Model - model 03
+
+```{r echo=FALSE}
+tab <- data.frame(
+  Model=1:5,
+  Uncertainty=rep("NepS & IBTS = cv", 5),
+  `Spin Up`=rep(160, 5),
+  robflagi=c("0, 1, 1", "-", "0, 1, 1", "0, 1, 1", "fixed with pp"),
+  `sd for priors`=rep(0.3, 5),
+  logalpha=rep("disabled", 5),
+  logabeta=rep("disabled", 5),
+  logn=rep("fixed to Schaefer", 5),
+  logr=c(0.5, 0.5, 0.38, 0.25, 0.5),
+  logsdi=rep(0.1, 5),
+  logsdb=rep(0.15, 5),
+  logsdc=rep(0.1, 5),
+  check.names=FALSE
+)
+
+kbl(tab,
+    format="html", escape=FALSE, align="c") %>%
+  kable_styling(
+    bootstrap_options=c("striped","hover","condensed","responsive"),
+    full_width=TRUE,
+    position="center") %>%
+  column_spec(1:ncol(tab), extra_css="white-space: nowrap;") %>%
+  row_spec(0, extra_css="white-space: nowrap; text-align: center; vertical-align: middle;") 
+```
+
+
+# Model 03
+
+## Create the SPiCT input object
+
+```{r fig.width=12, fig.height=8, dpi=300}
+rm(inp)
+
+prior_r <- 0.38
+prior_r_sd <- 0.3
+
+prior_sdi <- 0.1
+prior_sdi_sd <- 0.3
+
+prior_sdb <- 0.15
+prior_sdb_sd <- 0.3
+
+prior_sdc <- 0.1
+prior_sdc_sd <- 0.3
+
+
+inp <- list()
+
+inp$timeC <- nep$Year
+inp$obsC  <- nep$Catches
+inp$timeI <- list(nep$Year + 0.5,
+                  nep$Year + 9.5/12, ## mid of October
+                  nep$Year + 5.5/12) ## mid of June
+inp$obsI  <- list(nep$CPUE_norm,
+                  nep$IBTS_DeltaGAM_norm,
+                  nep$NepS_norm)
+
+
+inp$priors$logalpha <- c(0,0,0)
+inp$priors$logbeta  <- c(0,0,0)
+inp$priors$logn     <- c(0,0,0) #disable logn prior when fixing n
+
+inp$phases$logn <- -1     #fixing n to resemble the Schaefer production model
+inp$ini$logn    <- log(2) #good practice to always define value for logn when fixing
+
+inp$priors$logr   <- c(log(prior_r) - 0.5 * prior_r_sd^2, prior_r_sd, 1)
+inp$priors$logsdb <- c(log(prior_sdb) - 0.5 * prior_sdb_sd^2, prior_sdb_sd, 1)
+inp$priors$logsdc <- c(log(prior_sdc)-0.5*prior_sdc_sd^2,prior_sdc_sd,1)
+inp$priors$logsdi <- list(c(log(prior_sdi)-0.5*prior_sdi_sd^2,prior_sdi_sd,1),
+                          c(0,0,0),
+                          c(0,0,0))
+
+inp$nspinup <- 160
+
+inp$stdevfacI <- list(rep(1, length(inp$timeI[[1]])),
+                      rep(1, length(inp$timeI[[2]])),
+                      rep(1, length(inp$timeI[[3]])))
+
+cv <- sqrt(exp((nep$IBTS_DeltaGAM_upp - nep$IBTS_DeltaGAM_low) / (2 * 1.96)) - 1)
+cv <- cv/mean(cv, na.rm = TRUE)
+inp$stdevfacI[[2]][!is.na(cv)] <- cv[!is.na(cv)]
+cv <- sqrt(exp((nep$NepS_upp - nep$NepS_low) / (2 * 1.96)) - 1)
+cv <- cv/mean(cv, na.rm = TRUE)
+inp$stdevfacI[[3]][!is.na(cv)] <- cv[!is.na(cv)]
+
+inp$robflagi <- c(0,1,1) 
+
+plotspict.data(inp, qlegend=TRUE)
+plotspict.ci(inp)
+```
+
+## Fit the SPiCT model
+
+```{r}
+fit_Sc04_Mod03 <- fit.spict(inp)
+fit_Sc04_Mod03 <- calc.osa.resid(fit_Sc04_Mod03)
+fit_Sc04_Mod03 <- calc.process.resid(fit_Sc04_Mod03)
+retrofit_Sc04_Mod03 <- retro(fit_Sc04_Mod03)
+hc.fit_Sc04_Mod03 <- hindcast(fit_Sc04_Mod03, npeels=5)
+retrofit_Sc04_Mod03_8p <- retro(fit_Sc04_Mod03, nretroyear=8)
+hc.fit_Sc04_Mod03_8p <- hindcast(fit_Sc04_Mod03, npeels=6)  ## nao converge com mais de 7
+
+fit_Sc04_Mod03
+```
+
+## Plots
+
+```{r fig.width=12, fig.height=8, dpi=300}
+plot(fit_Sc04_Mod03)
+plotspict.priors(fit_Sc04_Mod03)
+plotspict.diagnostic(fit_Sc04_Mod03)
+plotspict.diagnostic.process(fit_Sc04_Mod03)
+plotspict.retro(retrofit_Sc04_Mod03)
+plotspict.retro.fixed(retrofit_Sc04_Mod03)
+plotspict.hindcast(hc.fit_Sc04_Mod03, legend.pos=NA)
+
+plotspict.retro(retrofit_Sc04_Mod03_8p)
+plotspict.hindcast(hc.fit_Sc04_Mod03_8p, legend.pos=NA)
+```
+
+## Diagnostics check-list for acceptance
+
+```{r fig.width=12, fig.height=8, dpi=300}
+# 1: Convergence: 0 => OK
+retrofit_Sc04_Mod03$opt$convergence
+
+# 2: Finite Parameters: TRUE => OK
+all(is.finite(retrofit_Sc04_Mod03$sd))
+
+# 3&8: Violatiom of model assumptions
+sumspict.diagnostics(fit_Sc04_Mod03)
+
+# 4: Retrospective pattern: should be between -0.2 and 0.2 (-20% and 20%)
+mohns_rho(retrofit_Sc04_Mod03, what=c("BBmsy","FFmsy"))
+
+# 5: Realistic production curve: if between 0.1 and 0.9 => OK
+calc.bmsyk(retrofit_Sc04_Mod03)
+
+# 6: Assessment uncertainty: if order of magnitude < 2 => OK)
+calc.om(retrofit_Sc04_Mod03)
+
+# 7: Initial Values sensitivity - jitter
+#    if same estimates for all initial values => OK (The distance should preferably be close to zero)
+sens.ini_Sc04_Mod03 <- check.ini(fit_Sc04_Mod03, ntrials=30)
+sens.ini_Sc04_Mod03$check.ini$resmat
+
+# 9: Hindcast
+plotspict.hindcast(hc.fit_Sc04_Mod03, legend.pos=NA)
+```
+
+## Management
+```{r fig.width=12, fig.height=8, dpi=300}
+## Time point to evaluate the model states - usually the end of the management period
+inp$maninterval <- c(2027, 2028)
+inp$maneval <- 2028
+
+fit_Sc04_Mod03_man <- fit.spict(inp)
+man = manage(fit_Sc04_Mod03_man, scenarios=c(8))
+man = add.man.scenario(man, scenarioTitle = "15frac", fractiles = list(catch=0.15))
+man = add.man.scenario(man, "F=Fmsy", breakpointB = 0.5) #/ breakpointB = MSYBtrigger
+man = add.man.scenario(man, "F=Fsq", ffac = 1)
+man = add.man.scenario(man, "F=0", ffac = 0)
+#man = add.man.scenario(man, scenarioTitle = "10frac", fractiles = list(catch=0.10))
+#man = add.man.scenario(man, scenarioTitle = "20frac", fractiles = list(catch=0.20))
+
+man
+sumspict.manage(man)
+plot2(man)
+plotspict.hcr(man)
+plotspict.catch(man)
+```
+## Plots and tables
+```{r}
+#   FUNCTION TO SAVE DATA   #########################################################################################
+xtab<-function(x,caption='Table X.', file=stdout(), width='"100%"', cornername='', dec=rep(1,ncol(x))){
+  nc<-ncol(x)
+  lin<-paste('<table width=',width,'>', sep='')
+  lin<-c(lin,sub('$','</td></tr>',sub('\\. |\\.$','.</b> ',
+                                      sub('^', paste('<tr><td colspan=',nc+1,'><b>',sep=''), caption))))
+  hr<-paste('<tr><td colspan=',nc+1,'><hr noshade></td></tr>', sep='')
+  lin<-c(lin,hr)
+  cnames<-colnames(x)
+  cnames<-paste(sub('$','</b></td>',sub('^','<td align=right><b>',cnames)), collapse='\t')
+  lin<-c(lin,paste('<tr>',paste('<td align=left><b>',cornername,'</b></td>',sep=''),cnames,'</tr>'))
+  lin<-c(lin,hr)
+  rnames<-sub('$','</b></td>',sub('^','<tr> <td align=left><b>',rownames(x)))
+  #x<-sapply(1:ncol(x),function(i)sub('NA','  ',format(round(x[,i],dec[i]))))
+  x<-sapply(1:ncol(x),function(i)sub('NA','  ',formatC(round(x[,i],dec[i]),digits=dec[i], format='f')))
+  for(i in 1:nrow(x)){
+    thisline<-paste(rnames[i],paste(sub('$','</td>',sub('^','<td align=right>',x[i,])), collapse='\t'),'</tr>', sep='')
+    lin<-c(lin,thisline)
+  }
+  lin<-c(lin,hr)
+  lin<-c(lin,'</table><br>\n')
+  writeLines(lin,con=file)
+}
+
+
+
+#- Function getAnnualCatch set up by A Kokkalis to extract annual catches (from B and F) for the 2 management years
+getAnnualCatch <- function(rep) {
+  b <- get.par("logB", rep, exp = TRUE) [,2]
+  f <- get.par("logF", rep, exp = TRUE) [,2]
+  data.frame(annual(rep$inp$time, b * f * rep$inp$dteuler, sum))
+}
+```
+
+### Summary Tables
+```{r}
+write.csv(capture.output(summary(fit_Sc04_Mod03)), "output/1_Fit.csv")
+
+xtab(sumspict.parest(fit_Sc04_Mod03), caption="Parameter Estimates", cornername="Parameter",
+     file="output/2_Parameter Estimates.xls", dec=rep(4,ncol(sumspict.parest(fit_Sc04_Mod03))))
+
+xtab(sumspict.states(fit_Sc04_Mod03), caption="States of the model", cornername="", 
+     file="output/3_States of the model.xls", dec=rep(4,ncol(sumspict.states(fit_Sc04_Mod03))))
+
+xtab(sumspict.predictions(fit_Sc04_Mod03), caption="Predictions", cornername="",
+     file="output/4_Predictions.xls",
+     dec=rep(4,ncol(sumspict.predictions(fit_Sc04_Mod03))))
+
+write.csv(sumspict.diagnostics(fit_Sc04_Mod03), "output/5_Diagnostics.csv")
+
+write.csv(sens.ini_Sc04_Mod03$check.ini$resmat , "output/6_Checkini.csv")
+
+xtab(cov2cor(fit_Sc04_Mod03$cov.fixed), caption="Correlation between parameters", cornername="",
+     file="output/7_Correlation between parameters.xls", 
+     dec=rep(4,ncol(cov2cor(sens.ini_Sc04_Mod03$cov.fixed))))
+
+
+tab2 <- sumspict.srefpoints(fit_Sc04_Mod03);
+xtab(tab2,caption="Stochastic reference points",cornername="Reference points",file="output/8_Reference_points.html",dec=rep(4,ncol(tab2)))
+
+tab3 <- sumspict.states(fit_Sc04_Mod03);
+xtab(tab3,caption="Estimated states",cornername="",file="output/9_Estimated_states.html",dec=rep(4,ncol(tab3)))
+
+tab4 <- sumspict.predictions(fit_Sc04_Mod03);
+xtab(tab4,caption="Forecast",cornername="",file="output/10_Forecast.html",dec=rep(4,ncol(tab4)))
+
+
+tab5 <- get.par("logBBmsy",fit_Sc04_Mod03,exp=TRUE)
+tab5_<- tab5[grep(".",rownames(tab5), fixed=TRUE, invert=TRUE),] 
+xtab(tab5_,caption="B/Bmsy",cornername="",file="output/11BBmsy.html",dec=rep(4,ncol(tab5_)))
+
+xtab(tab5,caption="B/Bmsy",cornername="",file="output/12_BBmsy_all.html",dec=rep(4,ncol(tab5)))
+write.csv(tab5_, "output/11_BBmsy.csv")
+
+
+tab6 <- get.par("logFFmsy",fit_Sc04_Mod03,exp=TRUE)
+tab6_ <- tab6[grep(".",rownames(tab6), fixed=TRUE, invert=TRUE),] 
+xtab(tab6_,caption="F/Fmsy",cornername="",file="output/13FFmsy.html",dec=rep(4,ncol(tab6_)))
+
+xtab(tab6,caption="F/Fmsy",cornername="",file="output/14_FFmsy_all.html",dec=rep(4,ncol(tab6)))
+write.csv(tab6_, "output/13_FFmsy.csv")
+
+
+tab6b <- get.par("logF",fit_Sc04_Mod03,exp=TRUE)
+xtab(tab6b,caption="F",cornername="",file="output/15_F_results.html",dec=rep(4,ncol(tab6b)))
+
+
+tab6c <- get.par("logCpred",fit_Sc04_Mod03,exp=TRUE)
+xtab(tab6c,caption="Catch",cornername="",file="output/16Catch.html",dec=rep(4,ncol(tab6c)))
+```
+
+### Advice sheet Tables
+#### Table 1
+```{r}
+ffmsy <- get.par("logFFmsy",man$man$`15frac`,exp=T);
+ffmsy[which(rownames(ffmsy)=="2026"),"est"]
+
+bbmsy <- get.par("logBBmsy",man$man$`15frac`,exp=T)
+bbmsy[which(rownames(bbmsy)=="2027"),"est"]
+
+catchy <- getAnnualCatch(fit_Sc04_Mod03_man);# Annual catch derived for the whole series
+nyears <- nrow(catchy)
+getAnnualCatch(man$man$`15frac`)[(nyears-2):nyears,];
+
+```
+
+#### Table 2
+
+##### Total catch (year +1)
+```{r}
+getAnnualCatch(man$man$`15frac`)[nyears,];
+getAnnualCatch(man$man$`F=Fmsy`)[nyears,];
+getAnnualCatch(man$man$`F=Fsq`)[nyears,];
+getAnnualCatch(man$man$`F=0`)[nyears,];
+
+#getAnnualCatch(man$man$ices)[nyears,];
+```
+##### F/Fmsy (year +1)
+```{r}
+ffmsy <- get.par("logFFmsy",man$man$`15frac`,exp=T)
+icesRound(ffmsy[which(rownames(ffmsy)=="2027"),"est"])
+
+ffmsy <- get.par("logFFmsy",man$man$`F=Fmsy`,exp=T)
+icesRound(ffmsy[which(rownames(ffmsy)=="2027"),"est"])
+
+ffmsy <- get.par("logFFmsy",man$man$`F=Fsq`,exp=T)
+icesRound(ffmsy[which(rownames(ffmsy)=="2027"),"est"])
+
+ffmsy <- get.par("logFFmsy",man$man$`F=0`,exp=T);
+icesRound(ffmsy[which(rownames(ffmsy)=="2027"),"est"])
+
+#ffmsy <- get.par("logFFmsy",man$man$ices,exp=T);
+#icesRound(ffmsy[which(rownames(ffmsy)=="2027"),"est"])
+
+```
+
+##### B/Bmsy (year+2)
+```{r}
+bbmsy <- get.par("logBBmsy",man$man$`15frac`,exp=T)
+icesRound(bbmsy[which(rownames(bbmsy)=="2028"),"est"])
+
+bbmsy <- get.par("logBBmsy",man$man$`F=Fmsy`,exp=T)
+icesRound(bbmsy[which(rownames(bbmsy)=="2028"),"est"])
+
+bbmsy <- get.par("logBBmsy",man$man$`F=Fsq`,exp=T)
+icesRound(bbmsy[which(rownames(bbmsy)=="2028"),"est"])
+
+bbmsy <- get.par("logBBmsy",man$man$`F=0`,exp=T)
+icesRound(bbmsy[which(rownames(bbmsy)=="2028"),"est"])
+
+
+#bbmsy <- get.par("logBBmsy",man$man$ices,exp=T)
+#icesRound(bbmsy[which(rownames(bbmsy)=="2028"),"est"])
+```
+
+##### % probability of B < Blim
+(!) Duvida se necessario ou não multiplicar por 100
+
+```{r}
+CI <- 0.95
+bmsyfrac <- 0.5
+TACyear <- c(2027, 2028) #(inp$maneval)
+
+
+calc_BbelowBmsy <- function(man_obj, scenario, TACyear = NULL, CI = TRUE, bmsyfrac = 1, percent = FALSE) {
+  
+  BMSY <- get.par("Bmsyd", man_obj[[scenario]])[2]
+  lBBmsy <- get.par("logBBmsy", man_obj[[scenario]], exp = FALSE, CI = CI)
+  
+  BlimBmsy <- 0.3
+  
+  ind <- if (is.null(TACyear)) nrow(lBBmsy) else 
+    which(dplyr::between(as.numeric(rownames(lBBmsy)), TACyear[1], TACyear[2]))
+  
+  i <- ind[length(ind)]
+  
+  prob <- pnorm(log(1), mean = lBBmsy[i, 2], sd = lBBmsy[i, 4])
+  
+  return(prob)
+}
+
+
+
+scenarios <- c("15frac", "F=Fmsy", "F=Fsq", "F=0")
+
+results <- sapply(scenarios, function(s) 
+  calc_BbelowBmsy(man$man, s, TACyear, CI)
+)
+
+results * 100
+```
+
+
+##### % B/Bmsy change
+```{r}
+# %Biomass change
+bbmsy <- get.par("logBBmsy",man$man$`15frac`,exp=T)
+ref <- bbmsy[which(rownames(bbmsy)=="2027"),"est"]
+
+
+#- Calculate differences for each scenario
+bb <- data.frame(get.par("logBBmsy",man$man$`15frac`,exp=TRUE))
+bb <- bb[grep(".",rownames(bb), fixed=TRUE, invert=TRUE),] 
+bbc <- bb[which(rownames(bb) %in% c("2028")),"est"]
+bbc
+icesRound(((bbc-ref)/ref)*100)
+
+
+bb <- data.frame(get.par("logBBmsy",man$man$`F=Fmsy`,exp=TRUE))
+bb <- bb[grep(".",rownames(bb), fixed=TRUE, invert=TRUE),] 
+bbc <- bb[which(rownames(bb) %in% c("2028")),"est"]
+#bbc
+icesRound(((bbc-ref)/ref)*100)
+
+
+bb <- data.frame(get.par("logBBmsy",man$man$`F=Fsq`,exp=TRUE))
+bb <- bb[grep(".",rownames(bb), fixed=TRUE, invert=TRUE),] 
+bbc <- bb[which(rownames(bb) %in% c("2028")),"est"]
+#bbc
+icesRound(((bbc-ref)/ref)*100)
+
+
+bb <- data.frame(get.par("logBBmsy",man$man$`F=0`,exp=TRUE))
+bb <- bb[grep(".",rownames(bb), fixed=TRUE, invert=TRUE),] 
+bbc <- bb[which(rownames(bb) %in% c("2028")),"est"]
+#bbc
+icesRound(((bbc-ref)/ref)*100)
+
+
+#bb <- data.frame(get.par("logBBmsy",man$man$ices,exp=TRUE))
+#bb <- bb[grep(".",rownames(bb), fixed=TRUE, invert=TRUE),] 
+#bbc <- bb[which(rownames(bb) %in% c("2028")),"est"]
+#icesRound(((bbc[1]-ref)/ref)*100)
+
+```
+##### Advice change
+```{r}
+# advice change (%)
+last_advice <- 170
+new_advice <- getAnnualCatch(man$man$`15frac`)[nyears,]$annvec
+new_advice
+round( (( (new_advice-last_advice)/last_advice)*100), 1)
+
+
+new_advice <- getAnnualCatch(man$man$`F=Fmsy`)[nyears,]$annvec
+new_advice
+round( (( (new_advice-last_advice)/last_advice)*100), 1)
+
+
+new_advice <- getAnnualCatch(man$man$`F=Fsq`)[nyears,]$annvec
+new_advice
+round( (( (new_advice-last_advice)/last_advice)*100), 1)
+
+
+new_advice <- getAnnualCatch(man$man$`F=0`)[nyears,]$annvec
+new_advice
+round( (( (new_advice-last_advice)/last_advice)*100), 1)
+
+```
+
+### Figures
+```{r}
+tiff("plots/Fit_results.tiff", res=300, width=2500, height=2500)
+plot(fit_Sc04_Mod03)
+dev.off()
+
+tiff("plots/Fit_results2.tiff", res=300, width=2500, height=2500)
+plot2(fit_Sc04_Mod03)
+dev.off()
+
+tiff(filename = "plots/Biomass.tiff")
+plotspict.biomass(fit_Sc04_Mod03)
+dev.off()
+
+tiff(filename = "plots/FishingM.tiff")
+plotspict.f(fit_Sc04_Mod03)
+dev.off()
+
+tiff(filename = "plots/BBmsy.tiff")
+plotspict.bbmsy(fit_Sc04_Mod03)
+dev.off()
+
+tiff(filename = "plots/FFmsy.tiff")
+plotspict.ffmsy(fit_Sc04_Mod03)
+dev.off()
+
+tiff(filename = "plots/Priors.tiff")
+plotspict.priors(fit_Sc04_Mod03)
+dev.off()
+
+tiff(filename = "plots/Diagnostics.tiff", res=300, width=2500, height=2500)
+plotspict.diagnostic(fit_Sc04_Mod03)
+dev.off()
+
+tiff(filename = "plots/Diagnostics2.tiff", res=300, width=1250, height=2500)
+plotspict.diagnostic.process(fit_Sc04_Mod03)
+dev.off()
+
+
+tiff(filename = "plots/Retrospective.tiff", res=300, width=2000, height=1500)
+plotspict.retro(retrofit_Sc04_Mod03)
+dev.off()
+
+tiff(filename = "plots/Retrospective_8p.tiff", res=300, width=2000, height=1500)
+plotspict.retro(retrofit_Sc04_Mod03_8p)
+dev.off()
+```
+
+#### Forecast
+```{r}
+tiff(filename = "plots/hcr.tiff", res=300, width=2000, height=2000)
+plotspict.hcr(man)
+dev.off()
+
+tiff(filename = "plots/catch.tiff", res=300, width=2000, height=2000)
+plotspict.catch(man)
+dev.off()
+
+tiff(filename = "plots/catch.tiff", res=300, width=2000, height=2000)
+plot2(man)
+dev.off()
+```
+
+## Save
+
+```{r}
+save(fit_Sc04_Mod03, retrofit_Sc04_Mod03, hc.fit_Sc04_Mod03, sens.ini_Sc04_Mod03, fit_Sc04_Mod03_man, man,
+     file=paste0("fit_Sc04_Mod03_", format(Sys.Date(), "%Y%m%d"), ".RData"))
+```
